@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>java NIO 编程解析2 | 你坤爸爸的博客</title>
+<meta name="description" content="温故而知新">
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<link rel="shortcut icon" href="https://zoukunchina.github.io/favicon.ico?v=1589453312120">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="stylesheet" href="https://unpkg.com/papercss@1.6.1/dist/paper.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+<link rel="stylesheet" href="https://zoukunchina.github.io/styles/main.css">
+
+
+<script src="https://cdn.bootcss.com/highlight.js/9.12.0/highlight.min.js"></script>
+
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+
+
+  </head>
+  <body>
+  
+    <nav class="navbar border fixed split-nav">
+  <div class="nav-brand">
+    <h3><a href="https://zoukunchina.github.io">你坤爸爸的博客</a></h3>
+  </div>
+  <div class="collapsible">
+    <input id="collapsible1" type="checkbox" name="collapsible1">
+    <button>
+      <label for="collapsible1">
+        <div class="bar1"></div>
+        <div class="bar2"></div>
+        <div class="bar3"></div>
+      </label>
+    </button>
+    <div class="collapsible-body">
+      <ul class="inline">
+        
+          <li>
+            
+              <a href="/" class="menu">
+                首页
+              </a>
+            
+          </li>
+        
+          <li>
+            
+              <a href="/archives" class="menu">
+                归档
+              </a>
+            
+          </li>
+        
+          <li>
+            
+              <a href="/tags" class="menu">
+                标签
+              </a>
+            
+          </li>
+        
+          <li>
+            
+              <a href="/post/about" class="menu">
+                关于
+              </a>
+            
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+</nav>
+
+    <div id="top" class="row site">
+      <div class="sm-12 md-8 col">
+        <div class="paper">
+          <article class="article">
+            <h1>java NIO 编程解析2</h1>
+            <p class="article-meta">
+              2020-05-14
+              
+            </p>
+            
+            <div class="post-content">
+              <p>java NIO 编程解析2<br>
+#（一）传统BIO线程模型/阻塞<br>
+传统的Java网络编程，本质上都是两个进程之间通过网络传输信息进行通讯，服务端通过绑定端口，监听客户端是否有请求，并且将其传输来的数据进行接收。其代码如下：</p>
+<pre><code class="language-java">ServerSocket serversocket = new ServerSocket(9999);
+System.out.println(&quot;服务启动,…&quot;);
+while (true) {
+    // 获取 socket套接字
+    System.out.println(&quot;accept等待获取socket...&quot;);
+    Socket socket = serversocket.accept();// accept()堵塞点
+    System.out.println(&quot;accept成功获取socket...&quot;);
+    // 获取客户端输入流
+    InputStream is = socket.getInputStream();
+    byte[] b = new byte[1024];
+    while (true) {
+        // 循环读取数据			
+        int data = is.read(b);// read()堵塞点
+        if (data != -1) {
+            String info = new String(b, 0, data, &quot;GBK&quot;);
+            System.out.println(&quot;客户端传输的信息为：&quot;+info);
+        } else {
+            break;
+        }
+    }
+    socket.close();
+}	
+</code></pre>
+<pre><code class="language-txt">观察这段代码，可以发现这段代码在运行中有两个堵塞点：
+	1、Socket socket = serversocket.accept();
+	2、in data = is.read(b);
+如果把服务端代码比喻成餐厅，客户端代码比喻成客户，从老板的角度来讲，这个餐厅在同一时间段内只能为以为客户服务，很显然这样效率是十分底下的，如何对其进行改进很多人都会想到使用多线程来解决。
+</code></pre>
+<h1 id="二使用多线程解决传统bio堵塞">（二）使用多线程解决传统bio堵塞</h1>
+<p>代码思路就是，每次来一个请求开辟一个线程，互相不影响，这样就不会造成主线程堵塞，而影响其他的请求。其服务端的代码如下：</p>
+<pre><code class="language-Java">ServerSocket serversocket = new ServerSocket(9999);
+System.out.println(&quot;服务启动,…&quot;);
+while(true){
+	// 获取 socket套接字			
+	Socket socket = serversocket.accept();// accept()堵塞点
+	System.out.println(&quot;新客户连接上来了…&quot;);
+	//将读取文件堵塞放到线程里面
+	Thread t = new Thread(new SocketIo(socket));
+	t.start();
+}
+	
+
+class SocketIo implements Runnable{
+	private Socket socket;	
+	public SocketIo(Socket socket) {
+		this.socket = socket;
+	}
+	@Override
+	public void run() {
+		// TODO Auto-generated method stub
+		System.out.println(&quot;当前线程为：&quot;+Thread.currentThread());
+		PrintWriter pw;
+		try {
+			pw = new PrintWriter(socket.getOutputStream());
+			pw.write(&quot;你好啊&quot;);
+			pw.flush();
+			socket.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}	
+	}	
+}
+</code></pre>
+<pre><code class="language-text">1、每次来一个请求开辟一个线程，互相不影响，主线程负责接收socket，具体的io流操作创建一个新的线程去执行，这样第二个请求到来时就不会因为第一个线程还在进行读写操作造成的堵塞影响对第二个请求的接收。
+拿餐厅的角度来形容就是就餐的人来一个就让一个服务员进行专门的服务
+
+2、但是随着并发量的扩展，显然一个请求开启一个线程十分的不现实，成千上万的线程量对系统来讲是一个很大的负担，
+会造成系统资源越来越紧张，这跟餐厅是一样的，一个餐厅成百上千个人来吃饭，你就请成白上千个人，最后餐厅就倒闭了。
+所以对这个代码进行改进，自然就使用了线程池技术，实现一个伪异步io
+</code></pre>
+<h1 id="三使用线程池技术进行网络编程">（三）使用线程池技术进行网络编程</h1>
+<p>对之前的代码进行优化，通过使用线程池技术，避免重复的创建线程资源，典型的用空间换取时间来提升效率。但是这种方法也有缺陷，既当请求大于线程池大小时，依旧会发生堵塞，所以说是伪异步iO，其底层依旧是堵塞的</p>
+<pre><code class="language-java">//创建一个10的线程池，线程池60秒之后自动释放
+ExecutorService threadPool  =  Executors.newFixedThreadPool(10);
+ServerSocket serversocket = new ServerSocket(9999);
+System.out.println(&quot;服务启动,…&quot;);
+while(true){
+	// 获取 socket套接字			
+	Socket socket = serversocket.accept();// accept()堵塞点
+	System.out.println(&quot;新客户连接上来了…&quot;);
+	//将读取文件堵塞放到线程池里面,并执行
+	threadPool.execute(new SocketIo(socket));
+}
+</code></pre>
+<h1 id="四java-nio-网络编程">（四）Java NIO 网络编程</h1>
+<p>java在jdk1.4当中推出了nio,这是一个面向块的io流系统<br>
+系统以块为一个基本操作单元，由于数据块有多个字节组成，处理起来要比按字节处理数据更快更有效率。<br>
+在NIO中有几个核心对象需要理解，分别是：缓冲区（Buffer）、通道（Channel）、选择器（Selector）。<br>
+在nio网络编程当中：<br>
+1、Selector 通道的管理器<br>
+2、ServerSocketChannel(ServerSocket)： 只关心客户端连接事件<br>
+3、SocketChannel(Socket)：关心读事件，写事件，读写事件<br>
+4、SelectionKey 事件集合<br>
+5、ByteBuffer 缓存流（读写时可以切换）</p>
+<p>其客户端代码如下：</p>
+<pre><code class="language-Java">//1.创建SocketChannel
+SocketChannel socketChannel=SocketChannel.open();
+//2.连接服务器
+socketChannel.connect(new InetSocketAddress(&quot;127.0.0.1&quot;,9999));
+//3.写数据
+ByteBuffer buffer=ByteBuffer.allocate(1024);
+buffer.put(&quot;我是客户端~&quot;.getBytes());
+buffer.flip();
+socketChannel.write(buffer);
+socketChannel.shutdownOutput();
+//4.读数据
+ByteArrayOutputStream bos = new ByteArrayOutputStream();
+int len = 0;
+while (true) {
+    buffer.clear();
+    len = socketChannel.read(buffer);
+    if (len == -1)
+        break;
+    buffer.flip();
+    while (buffer.hasRemaining()) {
+        bos.write(buffer.get());
+    }
+}
+//6.获取服务端响应回来的消息
+System.out.println(&quot;客户端收到:&quot;+new String(bos.toByteArray()));
+//7.关闭通道
+socketChannel.close();
+</code></pre>
+<p>服务端代码如下：</p>
+<pre><code class="language-Java">package com.aa.nio;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
+
+public class NioServer {
+    private static final int BUF_SIZE = 1024;
+    private static final int PORT = 9999;
+    
+    private ServerSocketChannel servSocketChannel = null;
+    private Selector selector = null;
+    
+    public static void main(String[] args) {
+        new NioServer().startServer();
+        
+    }
+    
+    public void startServer() {
+        try {  
+            servSocketChannel = ServerSocketChannel.open(); 
+            // 设置为非阻塞
+            servSocketChannel.configureBlocking(false);  
+            // 绑定端口  
+            servSocketChannel.socket().bind(new InetSocketAddress(PORT));
+            // 获得一个通道选择器(管理器)
+            selector = Selector.open();
+            // 注册监听事件
+            // 将通道选择器和该通道绑定，并为该通道注册SelectionKey.OP_ACCEPT事件,注册该事件后，
+    		// 当该事件到达时，selector.select()会返回，如果该事件没到达selector.select()会一直阻塞。
+    		// 意思是大门交给selector看着，给我监听是否有accpet事件
+            servSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+            System.out.println(&quot;服务端启动成功...&quot;);
+            listen();
+        } catch (IOException e) {  
+            e.printStackTrace();  
+        }  
+    }
+    
+    private void listen() {
+        while (true) {
+            try {
+                selector.select();
+                Iterator&lt;SelectionKey&gt; iter = selector.selectedKeys().iterator();
+                /*
+        		 * **SelectionKey中定义的4中事件 *** OP_ACCEPT 
+        		 * 接收连接继续事件，表示服务器监听到了客户连接，服务器可以接收这个连接了 OP_CONNECT 
+        		 * 连接就绪事件，表示连接已经建立成功 OP_READ 
+        		 * 读就绪事件，表示通道中已经有了可读的数据，可以执行读操作了 OP_WRITE 
+        		 * 写就绪事件，表示已经可以向通道写数据了（通道目前可以用于写操作）
+        		 */
+                while (iter.hasNext()) {
+                    SelectionKey key = iter.next();
+                    //System.out.println(&quot;selector选中的注册事件为：&quot;+key.readyOps());
+                    if (key.isValid() &amp;&amp; key.isAcceptable()) {// 处理客户端连接请求事件
+                        System.out.println(&quot;事件为：accept&quot;);
+                        handleAccept(key);
+                    }
+                    if (key.isValid() &amp;&amp; key.isReadable()) {
+                        System.out.println(&quot;事件为：read&quot;);
+                        handleRead2(key);
+                    }
+                    if (key.isValid() &amp;&amp; key.isWritable()) {
+                        System.out.println(&quot;事件为：write&quot;);
+                        handleWrite2(key);
+                    }
+                    if (key.isValid() &amp;&amp; key.isConnectable()) {
+                        System.out.println(&quot;isConnectable = true&quot;);
+                    }
+                    iter.remove();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    //处理accept请求
+    public static void handleAccept(SelectionKey key) throws IOException {
+        ServerSocketChannel ssChannel = (ServerSocketChannel) key.channel();
+        // 获得和客户端连接的通道
+    	// 完成该操作意味着完成TCP三次握手，TCP物理链路正式建立
+        SocketChannel sc = ssChannel.accept();
+        // 设置成非阻塞
+        sc.configureBlocking(false);
+        // 在和客户端连接成功之后，为了可以接收到客户端的信息，需要给通道设置读的权限。
+        sc.register(key.selector(), SelectionKey.OP_READ,ByteBuffer.allocateDirect(BUF_SIZE));
+    }
+    
+	//处理read请求
+    public static void handleRead2(SelectionKey key) throws IOException {
+        //SocketChannel sc = (SocketChannel) key.channel();
+        try {
+        	SocketChannel readChannel = (SocketChannel) key.channel();
+            // I/O读数据操作
+            ByteBuffer buffer = ByteBuffer.allocate(1024);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            int len = 0;
+            while (true) {
+                buffer.clear();
+                len = readChannel.read(buffer);
+                if (len == -1) break;
+                buffer.flip();
+                while (buffer.hasRemaining()) {
+                    baos.write(buffer.get());
+                }
+            }
+            System.out.println(&quot;服务器端接收到的数据：&quot;+ new String(baos.toByteArray()));
+            //注册写操作
+            readChannel.register(key.selector(), SelectionKey.OP_WRITE);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }        
+    }
+    
+    //处理write请求
+    public static void handleWrite2(SelectionKey key) throws IOException {
+    	System.out.println(&quot;开始写&quot;);
+        // 写操作
+        SocketChannel writeChannel = (SocketChannel) key.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        String message = &quot;你好，我好，大家好！！&quot;;
+        buffer.put(message.getBytes());
+        buffer.flip();        
+        writeChannel.write(buffer);
+        writeChannel.close();
+    }
+}
+</code></pre>
+<p>这是一个典型的Reactor单线程模型，reactor和handle都是在同一个线程里。后续的升级可以参考前一篇博客。这里就到这了，么么哒~~</p>
+
+            </div>
+          </article>
+        </div>
+        <div class="paper" data-aos="fade-in">
+          
+            <div class="next-post">
+              <div class="next">
+                下一篇
+              </div>
+              <a href="https://zoukunchina.github.io/post/reactor-xian-cheng-mo-xing-qian-xi-2/">
+                <h3 class="post-title">
+                  Reactor 线程模型浅析2
+                </h3>
+              </a>
+            </div>
+          
+        </div>
+        
+      </div>
+
+      <div class="sm-12 md-4 col sidebar">
+  <div class="paper info-container">
+    <img src="https://zoukunchina.github.io/images/avatar.png?v=1589453312120" class="no-responsive avatar">
+    <div class="text-muted">温故而知新</div>
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+  </div>
+  <div class="paper">
+    <div class="sidebar-title">
+      最新文章
+    </div>
+    <div class="row">
+      <ul>
+        
+          
+            <li>
+              <a href="https://zoukunchina.github.io/post/java-nio-bian-cheng-jie-xi-2/">java NIO 编程解析2</a>
+            </li>
+          
+        
+          
+            <li>
+              <a href="https://zoukunchina.github.io/post/reactor-xian-cheng-mo-xing-qian-xi-2/">Reactor 线程模型浅析2</a>
+            </li>
+          
+        
+          
+            <li>
+              <a href="https://zoukunchina.github.io/post/about/">关于</a>
+            </li>
+          
+        
+          
+            <li>
+              <a href="https://zoukunchina.github.io/post/hello-gridea/">Hello Gridea</a>
+            </li>
+          
+        
+      </ul>
+    </div>
+  </div>
+  <div class="paper">
+    <div class="sidebar-title">
+      标签列表
+    </div>
+    <div class="row">
+      
+        <a href="https://zoukunchina.github.io/tag/KgbxcFoSv/" class="badge secondary">
+          Gridea
+        </a>
+      
+    </div>
+  </div>
+  <div class="paper">
+    Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a> | <a class="rss" href="https://zoukunchina.github.io/atom.xml" target="_blank">RSS</a>
+  </div>
+</div>
+
+
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+
+<script type="application/javascript">
+
+AOS.init();
+
+hljs.initHighlightingOnLoad()
+
+</script>
+
+
+
+
+  </body>
+</html>
