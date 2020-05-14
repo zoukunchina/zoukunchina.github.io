@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" >
+
+<title>Reactor 线程模型浅析 | 你坤爸爸的博客</title>
+<meta name="description" content="温故而知新">
+
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
+<link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.7.2/css/all.css" integrity="sha384-fnmOCqbTlWIlj8LyTjo7mOUStjsKC4pOpQbqyi7RrhN7udi9RwhKkMHpvLbHG9Sr" crossorigin="anonymous">
+<link rel="shortcut icon" href="https://zoukunchina.github.io/favicon.ico?v=1589452924740">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+<link rel="stylesheet" href="https://zoukunchina.github.io/styles/main.css">
+
+
+
+<script src="https://cdn.jsdelivr.net/npm/vue/dist/vue.js"></script>
+<script src="https://cdn.bootcss.com/highlight.js/9.12.0/highlight.min.js"></script>
+
+<link rel="stylesheet" href="https://unpkg.com/aos@next/dist/aos.css" />
+
+
+
+  </head>
+  <body>
+    <div id="app" class="main">
+
+      <div class="sidebar" :class="{ 'full-height': menuVisible }">
+  <div class="top-container" data-aos="fade-right">
+    <div class="top-header-container">
+      <a class="site-title-container" href="https://zoukunchina.github.io">
+        <img src="https://zoukunchina.github.io/images/avatar.png?v=1589452924740" class="site-logo">
+        <h1 class="site-title">你坤爸爸的博客</h1>
+      </a>
+      <div class="menu-btn" @click="menuVisible = !menuVisible">
+        <div class="line"></div>
+      </div>
+    </div>
+    <div>
+      
+        
+          <a href="/" class="site-nav">
+            首页
+          </a>
+        
+      
+        
+          <a href="/archives" class="site-nav">
+            归档
+          </a>
+        
+      
+        
+          <a href="/tags" class="site-nav">
+            标签
+          </a>
+        
+      
+        
+          <a href="/post/about" class="site-nav">
+            关于
+          </a>
+        
+      
+    </div>
+  </div>
+  <div class="bottom-container" data-aos="flip-up" data-aos-offset="0">
+    <div class="social-container">
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    </div>
+    <div class="site-description">
+      温故而知新
+    </div>
+    <div class="site-footer">
+      Powered by <a href="https://github.com/getgridea/gridea" target="_blank">Gridea</a> | <a class="rss" href="https://zoukunchina.github.io/atom.xml" target="_blank">RSS</a>
+    </div>
+  </div>
+</div>
+
+
+      <div class="main-container">
+        <div class="content-container" data-aos="fade-up">
+          <div class="post-detail">
+            <h2 class="post-title">Reactor 线程模型浅析</h2>
+            <div class="post-date">2019-08-03</div>
+            
+              <div class="feature-container" style="background-image: url('https://timgsa.baidu.com/timg?image&amp;quality=80&amp;size=b9999_10000&amp;sec=1564844224545&amp;di=be179da3c1515283d73ededacaec5412&amp;imgtype=0&amp;src=http%3A%2F%2Fwx2.sinaimg.cn%2Forj360%2Fde86bbe0gy1g2kw005orag20dw08lb29.gif')">
+              </div>
+            
+            <div class="post-content">
+              <p>Java 编写的网络框架，大多数都是基于 Reactor 模式进行设计和开发，Reactor 模式基于事件驱动，特别适合处理海量的 I/O 事件，今天我们就对 Reactor 线程模型进行一次简单的学习以及总结，在学习reactor当中参考了了很多优秀的博客，由于个人的水平有限，可能存在理解错误。如果有出现错误，希望有所指正，谢谢~。</p>
+<!-- more -->
+<h1 id="经典的-io-通信模型">经典的 I/O 通信模型</h1>
+<p>Java 的 IO 模型本质上还是利用操作系统提供的接口来实现,所以最好先了解Linux底层模型。推荐阅读<br>
+<a href="https://segmentfault.com/a/1190000003063859#articleHeader7">Linux iO模式详解</a></p>
+<h2 id="linux系统网络模式下五种io通信模型">linux系统网络模式下五种iO通信模型。</h2>
+<p>1、阻塞 I/O（blocking IO）</p>
+<p>在 Linux 中，默认情况下所有的 Socket 都是 blocking 的，也就是阻塞的。即新数据尚未到达到socket时候，系统将会将该线程由运行状态变为阻塞状态，使其不再占用CPU资源。在Linux系统，一个典型的读操作流程如图所示：<br>
+<img src="https://zoukunchina.github.io/post-images/1564830693958.png" alt="" loading="lazy"></p>
+<p>当用户进程调用了 recvfrom 这个系统调用, 这次 I/O 调用经历如下 2 个阶段:</p>
+<p>准备数据： 对于服务端来说，很多时候数据在一开始还没有到达（比如，客户端正在发送数据过程当中），这个时候 kernel 就要等待足够的数据到来。而在服务端用户进程这边，由于资源没有请求到，需要等待，整个进程会被阻塞。</p>
+<p>数据返回：kernel 一但等到数据准备好了，它就会将数据从 kernel 中拷贝到用户内存，然后 kernel 返回结果，用户进程才解除 block 的状态，重新运行起来。</p>
+<p>也就是说，在这两个阶段当中，服务端在没有拿到数据之前都是处于堵塞状态。</p>
+<p>2、非阻塞 I/O（nonblocking IO）</p>
+<p>Linux 下，可以通过设置 socket 使其变为 non-blocking，也就是非阻塞。当对一个 non-blocking socket 执行读操作时，流程如图：<br>
+<img src="https://zoukunchina.github.io/post-images/1564830732235.png" alt="" loading="lazy"></p>
+<p>当用户进程发出 read 操作具体过程分为如下 3 个过程：</p>
+<p>开始准备数据：如果 Kernel 中的数据还没有准备好，那么它并不会 block 用户进程，而是立刻返回一个 error。</p>
+<p>数据准备中： 从用户进程角度讲，它发起一个read操作后，并不需要等待，而是马上就得到了一个结果。用户进程判断结果是一个 error 时，它就知道数据还没有准备好，于是它可以再次发送 read 操作（重复轮训）。</p>
+<p>一旦 kernel 中的数据准备好了，并且又再次收到了用户进程的 system call，那么它马上就将数据拷贝到了用户内存，然后返回</p>
+<p>也就是说，NIO的特点是用户进程需要<strong>不断的主动询问</strong>kernel数据好了没有。</p>
+<p>3、I/O 多路复用（ IO multiplexing）</p>
+<p>这种 I/O 方式也可称为 event driven I/O。Linux select/epoll 的好处就在于单个 process 就可以同时处理多个网络连接的 I/O。它的基本原理就是 select/epoll 会不断的轮询所负责的所有 socket，当某个 socket 有数据到达了，就通知用户进程。他的具体流程如图所示       ：<br>
+<img src="https://zoukunchina.github.io/post-images/1564831044835.png" alt="" loading="lazy"></p>
+<p>当用户进程调用了 select:</p>
+<p>整个进程会被 block，与此同时kernel 会 “监视” 所有 select 负责的 socket，当任何一个 socket 中的数据准备好了，select 就会返回。</p>
+<p>当用户进程再调用 read 操作，将数据从 kernel 拷贝到用户进程。这时和 blocking I/O 的图其实并没有太大的不同，事实上，还更差一些。因为这里需要使用两个 system call (select 和 recvfrom)，而 blocking I/O 只调用了一个 system call (recvfrom)。</p>
+<p>在 I/O multiplexing Model 中，实际中，对于每一个 socket，一般都设置成为 non-blocking，但是，如上图所示，整个用户的 process 其实是一直被 block 的。只不过 process 是被 select 这个函数 block，而不是被 socket I/O 给 block。</p>
+<p>4、异步 I/O（asynchronous IO）</p>
+<p>Linux 下的 asynchronous I/O，即异步 I/O，其实用得很少（需要高版本系统支持）。它的流程如图：<br>
+<img src="https://zoukunchina.github.io/post-images/1564830787416.png" alt="" loading="lazy"></p>
+<p>当用户进程发出 read 操作具体过程：</p>
+<p>用户进程发起 read 操作之后，并不需要等待，而是马上就得到了一个结果，立刻就可以开始去做其它的事。</p>
+<p>从 kernel 的角度，当它受到一个 asynchronous read 之后，首先它会立刻返回，所以不会对用户进程产生任何 block。然后，kernel 会等待数据准备完成，然后将数据拷贝到用户内存，当这一切都完成之后，kernel会给用户进程发送一个 signal，告诉它 read 操作完成了。、</p>
+<p>5、4种通信模型的类比</p>
+<p>现在将生活场景设置为一名顾客去餐厅点菜，顾客为消费者，厨师为生产者，煮好的菜为消费品</p>
+<p>现在设想有多名顾客去找大厨点菜，由于大厨只有一名，就势必会造成对资源（大厨）的 争斗！（现在我要假设现在顾客向大厨 我要吃什么：）</p>
+<p>​	走到厨房，跟厨师讲我要宫保鸡丁，大厨说：好！我就给你做，由于厨师还没做好，在厨师做好之前，只能在厨房门口等着（BIO）</p>
+<p>​	另一个顾客走进厨房，跟厨师讲我要鱼香肉丝，大厨说：我还开始做，现在还不能给你，与是该顾客就离开厨房，去做其他事情了，过了一会，再次到厨房问我的菜好了没？大厨说：快了，快了，于是该顾客又离开了，之后就一直轮询问厨师菜好了没？直到大厨把菜做好，顾客把菜端走结束（NIO）</p>
+<p>​	由于大多人直接去问厨师，厨师很烦，就招来了一个服务员，服务员负责接待顾客，轮询顾客你想要什么菜，一旦厨师把菜做好，就把菜给他（I/O multiplexing）</p>
+<p>​	还有一种就是顾客把菜和需要放在那张桌子上告诉厨师，厨师做好之后，直接放在那张桌子上，然后告诉顾客我弄好了，你可以准备吃了（Asynchronous I/O）</p>
+<h1 id="reactor-线程模型详述">Reactor 线程模型详述</h1>
+<h2 id="reactor是什么">reactor是什么？</h2>
+<p><strong>Reactor 是一种处理模式。</strong> Reactor 模式是处理并发 I/O 比较常见的一种模式，用于同步 I/O，中心思想是将所有要处理的IO事件注册到一个中心 I/O 多路复用器上，同时主线程/进程阻塞在多路复用器上；一旦有 I/O 事件到来或是准备就绪(文件描述符或 socket 可读、写)，多路复用器返回并将事先注册的相应 I/O 事件分发到对应的处理器中。</p>
+<p><strong>Reactor 也是一种实现机制。</strong> Reactor 利用事件驱动机制实现，和普通函数调用的不同之处在于：应用程序不是主动的调用某个 API 完成处理，而是恰恰相反，Reactor 逆置了事件处理流程，应用程序需要提供相应的接口并注册到 Reactor 上，如果相应的事件发生，Reactor 将主动调用应用程序注册的接口，这些接口又称为 “回调函数”。用 “好莱坞原则” 来形容 Reactor 再合适不过了：不要打电话给我们，我们会打电话通知你。</p>
+<h1 id="reactor-线程模型几种模式">Reactor 线程模型几种模式</h1>
+<h2 id="1-reactor单线程模型">1、Reactor单线程模型</h2>
+<figure data-type="image" tabindex="1"><img src="https://zoukunchina.github.io/post-images/1564830804497.png" alt="" loading="lazy"></figure>
+<p>注：handle1为（read-decode-compute-encode-send,这个线程事先注册到reactor上，由reactor来进行调用）</p>
+<p>Reactor单线程模型就是指所有的IO操作都在同一个NIO线程上面完成的，也就是IO处理线程是单线程的。NIO线程的职责是：<br>
+（1）作为NIO服务端，接收客户端的TCP连接；</p>
+<p>（2）作为NIO客户端，向服务端发起TCP连接；</p>
+<p>（3）读取通信对端的请求或者应答消息；</p>
+<p>（4）向通信对端发送消息请求或者应答消息。</p>
+<p>Reactor模式使用的是同步非阻塞IO(NIO)，所有的IO操作都不会导致阻塞，理论上一个线程可以独立的处理所有的IO操作(selector会主动去轮询哪些IO操作就绪)。从架构层次看，一个NIO线程确实可以完成其承担的职责，比如上图的acceptor类接收客户端的TCP请求消息，当链路建立成功之后，通过Dispatch将对应的ByteBuffer转发到指定的handler上，进行消息的处理。</p>
+<p><strong>缺点</strong>：对于单线程模型，acceptor处理和handler处理都在一个线程中处理，当某个handler阻塞时，会导致其他所有client的handler都得不到执行，并且更严重的是，handler的阻塞会导致整个服务不能接收新的client请求，因为acceptor也被阻塞了。</p>
+<h2 id="2-reactor-多线程模型">2、Reactor 多线程模型</h2>
+<figure data-type="image" tabindex="2"><img src="https://zoukunchina.github.io/post-images/1564830820995.png" alt="" loading="lazy"></figure>
+<p>注：handle1为（read-decode-compute-encode-send,这个线程事先注册到reactor上，由reactor来进行调用）</p>
+<p>Reactor多线程模型的特点如下：<br>
+（1）有一个专门的NIO线程—-Acceptor线程用于监听服务端，接收客户端的TCP连接请求。</p>
+<p>（2）网络IO操作—-读写等操作由一个专门的线程池负责，每个客户端连接都与一个特定的NIO线程绑定，线程池可以使用JDK标准的线程池实现，包含一个任务队列和N个可用的线程，这些NIO线程就负责读取、解码、编码、发送。</p>
+<p>（3）一个NIO线程可以同时处理N个链路，但是一个链路只对应一个NIO线程。</p>
+<p><strong>缺点</strong>：Reactor多线程模型可以满足绝大多数的场景，除了一些个别的特殊场景：比如一个NIO线程负责处理客户所有的连接请求，但是如果连接请求中包含认证的需求（安全认证），在百万级别的场景下，就存在性能问题了，因为认证本身就要消耗CPU，为了解决这种情景下的性能问题，产生了第三种线程模型：Reactor主从线程模型。</p>
+<h2 id="3-主从reactor-多线程模型">3、主从Reactor 多线程模型</h2>
+<figure data-type="image" tabindex="3"><img src="https://zoukunchina.github.io/post-images/1564830838184.png" alt="" loading="lazy"></figure>
+<p>主从Reactor线程模型的特点是：</p>
+<p>（1）服务端用于接收客户端连接的不再是一个单独的NIO线程，而是一个独立的NIO的线程池。</p>
+<p>（2）Acceptor接收到客户端TCP连接请求并处理完成后（可能包含接入认证），再将新创建的SocketChannel注册到IO线程池（sub reactor）的某个IO处理线程上并处理编解码和读写工作。</p>
+<p>（3）Acceptor线程池仅负责客户端的连接与认证，一旦链路连接成功，就将链路注册到后端的sub Reactor的IO线程池中。</p>
+<p>（4）利用主从Reactor模型可以解决服务端监听线程无法有效处理所有客户连接的性能不足问题，这也是netty推荐使用的线程模型。</p>
+<h1 id="reactor-线程模型的应用netty">Reactor 线程模型的应用：netty</h1>
+<p>待编辑。。。尽情期待</p>
+
+            </div>
+            
+            
+              <div class="next-post">
+                <div class="next">下一篇</div>
+                <a href="https://zoukunchina.github.io/post/hello-gridea/">
+                  <h3 class="post-title">
+                    Hello Gridea
+                  </h3>
+                </a>
+              </div>
+            
+
+            
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@next/dist/aos.js"></script>
+
+<script type="application/javascript">
+
+AOS.init();
+
+hljs.initHighlightingOnLoad()
+
+var app = new Vue({
+  el: '#app',
+  data: {
+    menuVisible: false,
+  },
+})
+
+</script>
+
+
+
+
+  </body>
+</html>

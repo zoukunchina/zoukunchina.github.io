@@ -1,0 +1,403 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://zoukunchina.github.io</id>
+    <title>你坤爸爸的博客</title>
+    <updated>2020-05-14T10:42:07.496Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://zoukunchina.github.io"/>
+    <link rel="self" href="https://zoukunchina.github.io/atom.xml"/>
+    <subtitle>温故而知新</subtitle>
+    <logo>https://zoukunchina.github.io/images/avatar.png</logo>
+    <icon>https://zoukunchina.github.io/favicon.ico</icon>
+    <rights>All rights reserved 2020, 你坤爸爸的博客</rights>
+    <entry>
+        <title type="html"><![CDATA[java NIO 编程解析]]></title>
+        <id>https://zoukunchina.github.io/post/java-nio-bian-cheng-jie-xi/</id>
+        <link href="https://zoukunchina.github.io/post/java-nio-bian-cheng-jie-xi/">
+        </link>
+        <updated>2019-09-07T11:57:42.000Z</updated>
+        <summary type="html"><![CDATA[<p>大家都知道netty是基于nio，为什么会有nio，是之前的bio有些问题无法解决，所以出现了nio，这篇博客就是尝试用Java在网络编程应用中从bio,逐渐向nio升级，对之前的reactor模型从代码层次可以进行进一步的理解</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>大家都知道netty是基于nio，为什么会有nio，是之前的bio有些问题无法解决，所以出现了nio，这篇博客就是尝试用Java在网络编程应用中从bio,逐渐向nio升级，对之前的reactor模型从代码层次可以进行进一步的理解</p>
+<!-- more -->
+<p>#（一）传统BIO线程模型/阻塞<br>
+传统的Java网络编程，本质上都是两个进程之间通过网络传输信息进行通讯，服务端通过绑定端口，监听客户端是否有请求，并且将其传输来的数据进行接收。其代码如下：</p>
+<pre><code class="language-java">ServerSocket serversocket = new ServerSocket(9999);
+System.out.println(&quot;服务启动,…&quot;);
+while (true) {
+    // 获取 socket套接字
+    System.out.println(&quot;accept等待获取socket...&quot;);
+    Socket socket = serversocket.accept();// accept()堵塞点
+    System.out.println(&quot;accept成功获取socket...&quot;);
+    // 获取客户端输入流
+    InputStream is = socket.getInputStream();
+    byte[] b = new byte[1024];
+    while (true) {
+        // 循环读取数据			
+        int data = is.read(b);// read()堵塞点
+        if (data != -1) {
+            String info = new String(b, 0, data, &quot;GBK&quot;);
+            System.out.println(&quot;客户端传输的信息为：&quot;+info);
+        } else {
+            break;
+        }
+    }
+    socket.close();
+}	
+</code></pre>
+<pre><code class="language-txt">观察这段代码，可以发现这段代码在运行中有两个堵塞点：
+	1、Socket socket = serversocket.accept();
+	2、in data = is.read(b);
+如果把服务端代码比喻成餐厅，客户端代码比喻成客户，从老板的角度来讲，这个餐厅在同一时间段内只能为以为客户服务，很显然这样效率是十分底下的，如何对其进行改进很多人都会想到使用多线程来解决。
+</code></pre>
+<h1 id="二使用多线程解决传统bio堵塞">（二）使用多线程解决传统bio堵塞</h1>
+<p>代码思路就是，每次来一个请求开辟一个线程，互相不影响，这样就不会造成主线程堵塞，而影响其他的请求。其服务端的代码如下：</p>
+<pre><code class="language-Java">ServerSocket serversocket = new ServerSocket(9999);
+System.out.println(&quot;服务启动,…&quot;);
+while(true){
+	// 获取 socket套接字			
+	Socket socket = serversocket.accept();// accept()堵塞点
+	System.out.println(&quot;新客户连接上来了…&quot;);
+	//将读取文件堵塞放到线程里面
+	Thread t = new Thread(new SocketIo(socket));
+	t.start();
+}
+	
+
+class SocketIo implements Runnable{
+	private Socket socket;	
+	public SocketIo(Socket socket) {
+		this.socket = socket;
+	}
+	@Override
+	public void run() {
+		// TODO Auto-generated method stub
+		System.out.println(&quot;当前线程为：&quot;+Thread.currentThread());
+		PrintWriter pw;
+		try {
+			pw = new PrintWriter(socket.getOutputStream());
+			pw.write(&quot;你好啊&quot;);
+			pw.flush();
+			socket.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}	
+	}	
+}
+</code></pre>
+<pre><code class="language-text">1、每次来一个请求开辟一个线程，互相不影响，主线程负责接收socket，具体的io流操作创建一个新的线程去执行，这样第二个请求到来时就不会因为第一个线程还在进行读写操作造成的堵塞影响对第二个请求的接收。
+拿餐厅的角度来形容就是就餐的人来一个就让一个服务员进行专门的服务
+
+2、但是随着并发量的扩展，显然一个请求开启一个线程十分的不现实，成千上万的线程量对系统来讲是一个很大的负担，
+会造成系统资源越来越紧张，这跟餐厅是一样的，一个餐厅成百上千个人来吃饭，你就请成白上千个人，最后餐厅就倒闭了。
+所以对这个代码进行改进，自然就使用了线程池技术，实现一个伪异步io
+</code></pre>
+<h1 id="三使用线程池技术进行网络编程">（三）使用线程池技术进行网络编程</h1>
+<p>对之前的代码进行优化，通过使用线程池技术，避免重复的创建线程资源，典型的用空间换取时间来提升效率。但是这种方法也有缺陷，既当请求大于线程池大小时，依旧会发生堵塞，所以说是伪异步iO，其底层依旧是堵塞的</p>
+<pre><code class="language-java">//创建一个10的线程池，线程池60秒之后自动释放
+ExecutorService threadPool  =  Executors.newFixedThreadPool(10);
+ServerSocket serversocket = new ServerSocket(9999);
+System.out.println(&quot;服务启动,…&quot;);
+while(true){
+	// 获取 socket套接字			
+	Socket socket = serversocket.accept();// accept()堵塞点
+	System.out.println(&quot;新客户连接上来了…&quot;);
+	//将读取文件堵塞放到线程池里面,并执行
+	threadPool.execute(new SocketIo(socket));
+}
+</code></pre>
+<h1 id="四java-nio-网络编程">（四）Java NIO 网络编程</h1>
+<p>java在jdk1.4当中推出了nio,这是一个面向块的io流系统<br>
+系统以块为一个基本操作单元，由于数据块有多个字节组成，处理起来要比按字节处理数据更快更有效率。<br>
+在NIO中有几个核心对象需要理解，分别是：缓冲区（Buffer）、通道（Channel）、选择器（Selector）。<br>
+在nio网络编程当中：<br>
+1、Selector 通道的管理器<br>
+2、ServerSocketChannel(ServerSocket)： 只关心客户端连接事件<br>
+3、SocketChannel(Socket)：关心读事件，写事件，读写事件<br>
+4、SelectionKey 事件集合<br>
+5、ByteBuffer 缓存流（读写时可以切换）</p>
+<p>其客户端代码如下：</p>
+<pre><code class="language-Java">//1.创建SocketChannel
+SocketChannel socketChannel=SocketChannel.open();
+//2.连接服务器
+socketChannel.connect(new InetSocketAddress(&quot;127.0.0.1&quot;,9999));
+//3.写数据
+ByteBuffer buffer=ByteBuffer.allocate(1024);
+buffer.put(&quot;我是客户端~&quot;.getBytes());
+buffer.flip();
+socketChannel.write(buffer);
+socketChannel.shutdownOutput();
+//4.读数据
+ByteArrayOutputStream bos = new ByteArrayOutputStream();
+int len = 0;
+while (true) {
+    buffer.clear();
+    len = socketChannel.read(buffer);
+    if (len == -1)
+        break;
+    buffer.flip();
+    while (buffer.hasRemaining()) {
+        bos.write(buffer.get());
+    }
+}
+//6.获取服务端响应回来的消息
+System.out.println(&quot;客户端收到:&quot;+new String(bos.toByteArray()));
+//7.关闭通道
+socketChannel.close();
+</code></pre>
+<p>服务端代码如下：</p>
+<pre><code class="language-Java">package com.aa.nio;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.util.Iterator;
+
+public class NioServer {
+    private static final int BUF_SIZE = 1024;
+    private static final int PORT = 9999;
+    
+    private ServerSocketChannel servSocketChannel = null;
+    private Selector selector = null;
+    
+    public static void main(String[] args) {
+        new NioServer().startServer();
+        
+    }
+    
+    public void startServer() {
+        try {  
+            servSocketChannel = ServerSocketChannel.open(); 
+            // 设置为非阻塞
+            servSocketChannel.configureBlocking(false);  
+            // 绑定端口  
+            servSocketChannel.socket().bind(new InetSocketAddress(PORT));
+            // 获得一个通道选择器(管理器)
+            selector = Selector.open();
+            // 注册监听事件
+            // 将通道选择器和该通道绑定，并为该通道注册SelectionKey.OP_ACCEPT事件,注册该事件后，
+    		// 当该事件到达时，selector.select()会返回，如果该事件没到达selector.select()会一直阻塞。
+    		// 意思是大门交给selector看着，给我监听是否有accpet事件
+            servSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+            System.out.println(&quot;服务端启动成功...&quot;);
+            listen();
+        } catch (IOException e) {  
+            e.printStackTrace();  
+        }  
+    }
+    
+    private void listen() {
+        while (true) {
+            try {
+                selector.select();
+                Iterator&lt;SelectionKey&gt; iter = selector.selectedKeys().iterator();
+                /*
+        		 * **SelectionKey中定义的4中事件 *** OP_ACCEPT 
+        		 * 接收连接继续事件，表示服务器监听到了客户连接，服务器可以接收这个连接了 OP_CONNECT 
+        		 * 连接就绪事件，表示连接已经建立成功 OP_READ 
+        		 * 读就绪事件，表示通道中已经有了可读的数据，可以执行读操作了 OP_WRITE 
+        		 * 写就绪事件，表示已经可以向通道写数据了（通道目前可以用于写操作）
+        		 */
+                while (iter.hasNext()) {
+                    SelectionKey key = iter.next();
+                    //System.out.println(&quot;selector选中的注册事件为：&quot;+key.readyOps());
+                    if (key.isValid() &amp;&amp; key.isAcceptable()) {// 处理客户端连接请求事件
+                        System.out.println(&quot;事件为：accept&quot;);
+                        handleAccept(key);
+                    }
+                    if (key.isValid() &amp;&amp; key.isReadable()) {
+                        System.out.println(&quot;事件为：read&quot;);
+                        handleRead2(key);
+                    }
+                    if (key.isValid() &amp;&amp; key.isWritable()) {
+                        System.out.println(&quot;事件为：write&quot;);
+                        handleWrite2(key);
+                    }
+                    if (key.isValid() &amp;&amp; key.isConnectable()) {
+                        System.out.println(&quot;isConnectable = true&quot;);
+                    }
+                    iter.remove();
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    //处理accept请求
+    public static void handleAccept(SelectionKey key) throws IOException {
+        ServerSocketChannel ssChannel = (ServerSocketChannel) key.channel();
+        // 获得和客户端连接的通道
+    	// 完成该操作意味着完成TCP三次握手，TCP物理链路正式建立
+        SocketChannel sc = ssChannel.accept();
+        // 设置成非阻塞
+        sc.configureBlocking(false);
+        // 在和客户端连接成功之后，为了可以接收到客户端的信息，需要给通道设置读的权限。
+        sc.register(key.selector(), SelectionKey.OP_READ,ByteBuffer.allocateDirect(BUF_SIZE));
+    }
+    
+	//处理read请求
+    public static void handleRead2(SelectionKey key) throws IOException {
+        //SocketChannel sc = (SocketChannel) key.channel();
+        try {
+        	SocketChannel readChannel = (SocketChannel) key.channel();
+            // I/O读数据操作
+            ByteBuffer buffer = ByteBuffer.allocate(1024);
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            int len = 0;
+            while (true) {
+                buffer.clear();
+                len = readChannel.read(buffer);
+                if (len == -1) break;
+                buffer.flip();
+                while (buffer.hasRemaining()) {
+                    baos.write(buffer.get());
+                }
+            }
+            System.out.println(&quot;服务器端接收到的数据：&quot;+ new String(baos.toByteArray()));
+            //注册写操作
+            readChannel.register(key.selector(), SelectionKey.OP_WRITE);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }        
+    }
+    
+    //处理write请求
+    public static void handleWrite2(SelectionKey key) throws IOException {
+    	System.out.println(&quot;开始写&quot;);
+        // 写操作
+        SocketChannel writeChannel = (SocketChannel) key.channel();
+        ByteBuffer buffer = ByteBuffer.allocate(1024);
+        String message = &quot;你好，我好，大家好！！&quot;;
+        buffer.put(message.getBytes());
+        buffer.flip();        
+        writeChannel.write(buffer);
+        writeChannel.close();
+    }
+}
+</code></pre>
+<p>这是一个典型的Reactor单线程模型，reactor和handle都是在同一个线程里。后续的升级可以参考前一篇博客。这里就到这了，么么哒~~</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Reactor 线程模型浅析]]></title>
+        <id>https://zoukunchina.github.io/post/reactor-xian-cheng-mo-xing-qian-xi/</id>
+        <link href="https://zoukunchina.github.io/post/reactor-xian-cheng-mo-xing-qian-xi/">
+        </link>
+        <updated>2019-08-03T10:59:22.000Z</updated>
+        <summary type="html"><![CDATA[<p>Java 编写的网络框架，大多数都是基于 Reactor 模式进行设计和开发，Reactor 模式基于事件驱动，特别适合处理海量的 I/O 事件，今天我们就对 Reactor 线程模型进行一次简单的学习以及总结，在学习reactor当中参考了了很多优秀的博客，由于个人的水平有限，可能存在理解错误。如果有出现错误，希望有所指正，谢谢~。</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>Java 编写的网络框架，大多数都是基于 Reactor 模式进行设计和开发，Reactor 模式基于事件驱动，特别适合处理海量的 I/O 事件，今天我们就对 Reactor 线程模型进行一次简单的学习以及总结，在学习reactor当中参考了了很多优秀的博客，由于个人的水平有限，可能存在理解错误。如果有出现错误，希望有所指正，谢谢~。</p>
+<!-- more -->
+<h1 id="经典的-io-通信模型">经典的 I/O 通信模型</h1>
+<p>Java 的 IO 模型本质上还是利用操作系统提供的接口来实现,所以最好先了解Linux底层模型。推荐阅读<br>
+<a href="https://segmentfault.com/a/1190000003063859#articleHeader7">Linux iO模式详解</a></p>
+<h2 id="linux系统网络模式下五种io通信模型">linux系统网络模式下五种iO通信模型。</h2>
+<p>1、阻塞 I/O（blocking IO）</p>
+<p>在 Linux 中，默认情况下所有的 Socket 都是 blocking 的，也就是阻塞的。即新数据尚未到达到socket时候，系统将会将该线程由运行状态变为阻塞状态，使其不再占用CPU资源。在Linux系统，一个典型的读操作流程如图所示：<br>
+<img src="https://zoukunchina.github.io/post-images/1564830693958.png" alt="" loading="lazy"></p>
+<p>当用户进程调用了 recvfrom 这个系统调用, 这次 I/O 调用经历如下 2 个阶段:</p>
+<p>准备数据： 对于服务端来说，很多时候数据在一开始还没有到达（比如，客户端正在发送数据过程当中），这个时候 kernel 就要等待足够的数据到来。而在服务端用户进程这边，由于资源没有请求到，需要等待，整个进程会被阻塞。</p>
+<p>数据返回：kernel 一但等到数据准备好了，它就会将数据从 kernel 中拷贝到用户内存，然后 kernel 返回结果，用户进程才解除 block 的状态，重新运行起来。</p>
+<p>也就是说，在这两个阶段当中，服务端在没有拿到数据之前都是处于堵塞状态。</p>
+<p>2、非阻塞 I/O（nonblocking IO）</p>
+<p>Linux 下，可以通过设置 socket 使其变为 non-blocking，也就是非阻塞。当对一个 non-blocking socket 执行读操作时，流程如图：<br>
+<img src="https://zoukunchina.github.io/post-images/1564830732235.png" alt="" loading="lazy"></p>
+<p>当用户进程发出 read 操作具体过程分为如下 3 个过程：</p>
+<p>开始准备数据：如果 Kernel 中的数据还没有准备好，那么它并不会 block 用户进程，而是立刻返回一个 error。</p>
+<p>数据准备中： 从用户进程角度讲，它发起一个read操作后，并不需要等待，而是马上就得到了一个结果。用户进程判断结果是一个 error 时，它就知道数据还没有准备好，于是它可以再次发送 read 操作（重复轮训）。</p>
+<p>一旦 kernel 中的数据准备好了，并且又再次收到了用户进程的 system call，那么它马上就将数据拷贝到了用户内存，然后返回</p>
+<p>也就是说，NIO的特点是用户进程需要<strong>不断的主动询问</strong>kernel数据好了没有。</p>
+<p>3、I/O 多路复用（ IO multiplexing）</p>
+<p>这种 I/O 方式也可称为 event driven I/O。Linux select/epoll 的好处就在于单个 process 就可以同时处理多个网络连接的 I/O。它的基本原理就是 select/epoll 会不断的轮询所负责的所有 socket，当某个 socket 有数据到达了，就通知用户进程。他的具体流程如图所示       ：<br>
+<img src="https://zoukunchina.github.io/post-images/1564831044835.png" alt="" loading="lazy"></p>
+<p>当用户进程调用了 select:</p>
+<p>整个进程会被 block，与此同时kernel 会 “监视” 所有 select 负责的 socket，当任何一个 socket 中的数据准备好了，select 就会返回。</p>
+<p>当用户进程再调用 read 操作，将数据从 kernel 拷贝到用户进程。这时和 blocking I/O 的图其实并没有太大的不同，事实上，还更差一些。因为这里需要使用两个 system call (select 和 recvfrom)，而 blocking I/O 只调用了一个 system call (recvfrom)。</p>
+<p>在 I/O multiplexing Model 中，实际中，对于每一个 socket，一般都设置成为 non-blocking，但是，如上图所示，整个用户的 process 其实是一直被 block 的。只不过 process 是被 select 这个函数 block，而不是被 socket I/O 给 block。</p>
+<p>4、异步 I/O（asynchronous IO）</p>
+<p>Linux 下的 asynchronous I/O，即异步 I/O，其实用得很少（需要高版本系统支持）。它的流程如图：<br>
+<img src="https://zoukunchina.github.io/post-images/1564830787416.png" alt="" loading="lazy"></p>
+<p>当用户进程发出 read 操作具体过程：</p>
+<p>用户进程发起 read 操作之后，并不需要等待，而是马上就得到了一个结果，立刻就可以开始去做其它的事。</p>
+<p>从 kernel 的角度，当它受到一个 asynchronous read 之后，首先它会立刻返回，所以不会对用户进程产生任何 block。然后，kernel 会等待数据准备完成，然后将数据拷贝到用户内存，当这一切都完成之后，kernel会给用户进程发送一个 signal，告诉它 read 操作完成了。、</p>
+<p>5、4种通信模型的类比</p>
+<p>现在将生活场景设置为一名顾客去餐厅点菜，顾客为消费者，厨师为生产者，煮好的菜为消费品</p>
+<p>现在设想有多名顾客去找大厨点菜，由于大厨只有一名，就势必会造成对资源（大厨）的 争斗！（现在我要假设现在顾客向大厨 我要吃什么：）</p>
+<p>​	走到厨房，跟厨师讲我要宫保鸡丁，大厨说：好！我就给你做，由于厨师还没做好，在厨师做好之前，只能在厨房门口等着（BIO）</p>
+<p>​	另一个顾客走进厨房，跟厨师讲我要鱼香肉丝，大厨说：我还开始做，现在还不能给你，与是该顾客就离开厨房，去做其他事情了，过了一会，再次到厨房问我的菜好了没？大厨说：快了，快了，于是该顾客又离开了，之后就一直轮询问厨师菜好了没？直到大厨把菜做好，顾客把菜端走结束（NIO）</p>
+<p>​	由于大多人直接去问厨师，厨师很烦，就招来了一个服务员，服务员负责接待顾客，轮询顾客你想要什么菜，一旦厨师把菜做好，就把菜给他（I/O multiplexing）</p>
+<p>​	还有一种就是顾客把菜和需要放在那张桌子上告诉厨师，厨师做好之后，直接放在那张桌子上，然后告诉顾客我弄好了，你可以准备吃了（Asynchronous I/O）</p>
+<h1 id="reactor-线程模型详述">Reactor 线程模型详述</h1>
+<h2 id="reactor是什么">reactor是什么？</h2>
+<p><strong>Reactor 是一种处理模式。</strong> Reactor 模式是处理并发 I/O 比较常见的一种模式，用于同步 I/O，中心思想是将所有要处理的IO事件注册到一个中心 I/O 多路复用器上，同时主线程/进程阻塞在多路复用器上；一旦有 I/O 事件到来或是准备就绪(文件描述符或 socket 可读、写)，多路复用器返回并将事先注册的相应 I/O 事件分发到对应的处理器中。</p>
+<p><strong>Reactor 也是一种实现机制。</strong> Reactor 利用事件驱动机制实现，和普通函数调用的不同之处在于：应用程序不是主动的调用某个 API 完成处理，而是恰恰相反，Reactor 逆置了事件处理流程，应用程序需要提供相应的接口并注册到 Reactor 上，如果相应的事件发生，Reactor 将主动调用应用程序注册的接口，这些接口又称为 “回调函数”。用 “好莱坞原则” 来形容 Reactor 再合适不过了：不要打电话给我们，我们会打电话通知你。</p>
+<h1 id="reactor-线程模型几种模式">Reactor 线程模型几种模式</h1>
+<h2 id="1-reactor单线程模型">1、Reactor单线程模型</h2>
+<figure data-type="image" tabindex="1"><img src="https://zoukunchina.github.io/post-images/1564830804497.png" alt="" loading="lazy"></figure>
+<p>注：handle1为（read-decode-compute-encode-send,这个线程事先注册到reactor上，由reactor来进行调用）</p>
+<p>Reactor单线程模型就是指所有的IO操作都在同一个NIO线程上面完成的，也就是IO处理线程是单线程的。NIO线程的职责是：<br>
+（1）作为NIO服务端，接收客户端的TCP连接；</p>
+<p>（2）作为NIO客户端，向服务端发起TCP连接；</p>
+<p>（3）读取通信对端的请求或者应答消息；</p>
+<p>（4）向通信对端发送消息请求或者应答消息。</p>
+<p>Reactor模式使用的是同步非阻塞IO(NIO)，所有的IO操作都不会导致阻塞，理论上一个线程可以独立的处理所有的IO操作(selector会主动去轮询哪些IO操作就绪)。从架构层次看，一个NIO线程确实可以完成其承担的职责，比如上图的acceptor类接收客户端的TCP请求消息，当链路建立成功之后，通过Dispatch将对应的ByteBuffer转发到指定的handler上，进行消息的处理。</p>
+<p><strong>缺点</strong>：对于单线程模型，acceptor处理和handler处理都在一个线程中处理，当某个handler阻塞时，会导致其他所有client的handler都得不到执行，并且更严重的是，handler的阻塞会导致整个服务不能接收新的client请求，因为acceptor也被阻塞了。</p>
+<h2 id="2-reactor-多线程模型">2、Reactor 多线程模型</h2>
+<figure data-type="image" tabindex="2"><img src="https://zoukunchina.github.io/post-images/1564830820995.png" alt="" loading="lazy"></figure>
+<p>注：handle1为（read-decode-compute-encode-send,这个线程事先注册到reactor上，由reactor来进行调用）</p>
+<p>Reactor多线程模型的特点如下：<br>
+（1）有一个专门的NIO线程—-Acceptor线程用于监听服务端，接收客户端的TCP连接请求。</p>
+<p>（2）网络IO操作—-读写等操作由一个专门的线程池负责，每个客户端连接都与一个特定的NIO线程绑定，线程池可以使用JDK标准的线程池实现，包含一个任务队列和N个可用的线程，这些NIO线程就负责读取、解码、编码、发送。</p>
+<p>（3）一个NIO线程可以同时处理N个链路，但是一个链路只对应一个NIO线程。</p>
+<p><strong>缺点</strong>：Reactor多线程模型可以满足绝大多数的场景，除了一些个别的特殊场景：比如一个NIO线程负责处理客户所有的连接请求，但是如果连接请求中包含认证的需求（安全认证），在百万级别的场景下，就存在性能问题了，因为认证本身就要消耗CPU，为了解决这种情景下的性能问题，产生了第三种线程模型：Reactor主从线程模型。</p>
+<h2 id="3-主从reactor-多线程模型">3、主从Reactor 多线程模型</h2>
+<figure data-type="image" tabindex="3"><img src="https://zoukunchina.github.io/post-images/1564830838184.png" alt="" loading="lazy"></figure>
+<p>主从Reactor线程模型的特点是：</p>
+<p>（1）服务端用于接收客户端连接的不再是一个单独的NIO线程，而是一个独立的NIO的线程池。</p>
+<p>（2）Acceptor接收到客户端TCP连接请求并处理完成后（可能包含接入认证），再将新创建的SocketChannel注册到IO线程池（sub reactor）的某个IO处理线程上并处理编解码和读写工作。</p>
+<p>（3）Acceptor线程池仅负责客户端的连接与认证，一旦链路连接成功，就将链路注册到后端的sub Reactor的IO线程池中。</p>
+<p>（4）利用主从Reactor模型可以解决服务端监听线程无法有效处理所有客户连接的性能不足问题，这也是netty推荐使用的线程模型。</p>
+<h1 id="reactor-线程模型的应用netty">Reactor 线程模型的应用：netty</h1>
+<p>待编辑。。。尽情期待</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Hello Gridea]]></title>
+        <id>https://zoukunchina.github.io/post/hello-gridea/</id>
+        <link href="https://zoukunchina.github.io/post/hello-gridea/">
+        </link>
+        <updated>2018-12-11T16:00:00.000Z</updated>
+        <summary type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>👏  欢迎使用 <strong>Gridea</strong> ！<br>
+✍️  <strong>Gridea</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+<!-- more -->
+<p><a href="https://github.com/getgridea/gridea">Github</a><br>
+<a href="http://hvenotes.fehey.com/">Gridea 主页</a><br>
+<a href="http://fehey.com/">示例网站</a></p>
+<h2 id="特性">特性👇</h2>
+<p>📝  你可以使用最酷的 <strong>Markdown</strong> 语法，进行快速创作</p>
+<p>🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片</p>
+<p>🏷️  你可以对文章进行标签分组</p>
+<p>📋  你可以自定义菜单，甚至可以创建外部链接菜单</p>
+<p>💻  你可以在 <strong>𝖶𝗂𝗇𝖽𝗈𝗐𝗌</strong> 或 <strong>𝖬𝖺𝖼𝖮𝖲</strong> 设备上使用此客户端</p>
+<p>🌎  你可以使用 <strong>𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌</strong> 或 <strong>Coding Pages</strong> 向世界展示，未来将支持更多平台</p>
+<p>💬  你可以进行简单的配置，接入 <a href="https://github.com/gitalk/gitalk">Gitalk</a> 或 <a href="https://github.com/SukkaW/DisqusJS">DisqusJS</a> 评论系统</p>
+<p>🇬🇧  你可以使用<strong>中文简体</strong>或<strong>英语</strong></p>
+<p>🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力</p>
+<p>🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步</p>
+<p>🌱 当然 <strong>Gridea</strong> 还很年轻，有很多不足，但请相信，它会不停向前🏃</p>
+<p>未来，它一定会成为你离不开的伙伴</p>
+<p>尽情发挥你的才华吧！</p>
+<p>😘 Enjoy~</p>
+]]></content>
+    </entry>
+</feed>
